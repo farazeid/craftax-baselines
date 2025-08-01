@@ -2,6 +2,7 @@ tmp/
 wandb/
 res/
 runs/
+mlruns
 
 play_data
 

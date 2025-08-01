@@ -1,4 +1,6 @@
+# uv run --python 3.9 --script
 # /// script
+# requires-python = ">=3.9"
 # dependencies = [
 # "jax[cuda12]",
 # "distrax",

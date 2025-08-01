@@ -1,36 +1,56 @@
+# /// script
+# dependencies = [
+# "jax[cuda12]",
+# "distrax",
+# "optax",
+# "flax",
+# "numpy",
+# "black",
+# "pre-commit",
+# "argparse",
+# "wandb",
+# "mlflow",
+# "orbax-checkpoint==0.5.0",
+# "pygame",
+# "gymnax",
+# "chex",
+# "matplotlib",
+# "imageio",
+# "craftax"
+# ]
+# ///
+
 import argparse
 import os
 import sys
 import time
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+import mlflow
 import numpy as np
 import optax
-from craftax.craftax_env import make_craftax_env_from_name
-
 import wandb
-from typing import NamedTuple
-
+from craftax.craftax_env import make_craftax_env_from_name
 from flax.training import orbax_utils
 from flax.training.train_state import TrainState
-from orbax.checkpoint import (
-    PyTreeCheckpointer,
-    CheckpointManagerOptions,
-    CheckpointManager,
-)
-
 from logz.batch_logging import batch_log, create_log_dict
 from models.actor_critic import (
     ActorCritic,
     ActorCriticConv,
 )
 from models.icm import ICMEncoder, ICMForward, ICMInverse
+from orbax.checkpoint import (
+    CheckpointManager,
+    CheckpointManagerOptions,
+    PyTreeCheckpointer,
+)
 from wrappers import (
+    AutoResetEnvWrapper,
+    BatchEnvWrapper,
     LogWrapper,
     OptimisticResetVecEnvWrapper,
-    BatchEnvWrapper,
-    AutoResetEnvWrapper,
 )
 
 # Code adapted from the original implementation made by Chris Lu
@@ -404,9 +424,9 @@ def make_train(config):
                 ) = update_state
                 rng, _rng = jax.random.split(rng)
                 batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
-                assert (
-                    batch_size == config["NUM_STEPS"] * config["NUM_ENVS"]
-                ), "batch size must be equal to number of steps * number of envs"
+                assert batch_size == config["NUM_STEPS"] * config["NUM_ENVS"], (
+                    "batch size must be equal to number of steps * number of envs"
+                )
                 permutation = jax.random.permutation(_rng, batch_size)
                 batch = (traj_batch, advantages, targets)
                 batch = jax.tree.map(
@@ -540,9 +560,9 @@ def make_train(config):
                 (ex_state, traj_batch, rng) = update_state
                 rng, _rng = jax.random.split(rng)
                 batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
-                assert (
-                    batch_size == config["NUM_STEPS"] * config["NUM_ENVS"]
-                ), "batch size must be equal to number of steps * number of envs"
+                assert batch_size == config["NUM_STEPS"] * config["NUM_ENVS"], (
+                    "batch size must be equal to number of steps * number of envs"
+                )
                 permutation = jax.random.permutation(_rng, batch_size)
                 batch = jax.tree.map(
                     lambda x: x.reshape((batch_size,) + x.shape[2:]), traj_batch

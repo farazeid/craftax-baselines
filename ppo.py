@@ -690,12 +690,13 @@ def run_ppo(config):
             print(f"saved runner state to {path}")
             save_args = orbax_utils.save_args_from_target(train_state)
             checkpoint_manager.save(
-                config["TOTAL_TIMESTEPS"],
+                int(config["TOTAL_TIMESTEPS"]),
                 train_state,
                 save_kwargs={"save_args": save_args},
             )
 
         if config["SAVE_POLICY"]:
+            print("Saving policy...")
             _save_network(0, "policies")
 
 

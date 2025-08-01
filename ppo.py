@@ -642,15 +642,25 @@ def run_ppo(config):
     config = {k.upper(): v for k, v in config.__dict__.items()}
 
     if config["USE_WANDB"]:
-        wandb.init(
-            project=config["WANDB_PROJECT"],
-            entity=config["WANDB_ENTITY"],
-            config=config,
-            name=config["ENV_NAME"]
-            + "-"
+        # wandb.init(
+        #     project=config["WANDB_PROJECT"],
+        #     entity=config["WANDB_ENTITY"],
+        #     config=config,
+        #     name=config["ENV_NAME"]
+        #     + "-"
+        #     + str(int(config["TOTAL_TIMESTEPS"] // 1e6))
+        #     + "M",
+        # )
+        mlflow.set_experiment(
+            config["ENV_NAME"]
+            + "."
             + str(int(config["TOTAL_TIMESTEPS"] // 1e6))
-            + "M",
+            + "M"
+            + "."
+            + config["WANDB_PROJECT"]
         )
+        mlflow.start_run()
+        mlflow.log_params(config)
 
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_REPEATS"])
@@ -671,7 +681,11 @@ def run_ppo(config):
             train_state = jax.tree.map(lambda x: x[0], train_states)
             orbax_checkpointer = PyTreeCheckpointer()
             options = CheckpointManagerOptions(max_to_keep=1, create=True)
-            path = os.path.join(wandb.run.dir, dir_name)
+            # path = os.path.join(wandb.run.dir, dir_name)
+            artifact_uri = mlflow.get_artifact_uri()
+            if artifact_uri.startswith("file://"):
+                artifact_uri = artifact_uri[len("file://") :]
+            path = os.path.join(artifact_uri, dir_name)
             checkpoint_manager = CheckpointManager(path, orbax_checkpointer, options)
             print(f"saved runner state to {path}")
             save_args = orbax_utils.save_args_from_target(train_state)
@@ -719,7 +733,7 @@ if __name__ == "__main__":
     parser.add_argument("--save_policy", action="store_true")
     parser.add_argument("--num_repeats", type=int, default=1)
     parser.add_argument("--layer_size", type=int, default=512)
-    parser.add_argument("--wandb_project", type=str)
+    parser.add_argument("--wandb_project", type=str, default="PPO")
     parser.add_argument("--wandb_entity", type=str)
     parser.add_argument(
         "--use_optimistic_resets", action=argparse.BooleanOptionalAction, default=True

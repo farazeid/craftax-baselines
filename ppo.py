@@ -770,9 +770,17 @@ if __name__ == "__main__":
     parser.add_argument("--use_e3b", action="store_true")
     parser.add_argument("--e3b_lambda", type=float, default=0.1)
 
+    # Deterministic
+    parser.add_argument(
+        "--deterministic", action=argparse.BooleanOptionalAction, default=True
+    )
+
     args, rest_args = parser.parse_known_args(sys.argv[1:])
     if rest_args:
         raise ValueError(f"Unknown args {rest_args}")
+
+    if args.deterministic:
+        os.environ["XLA_FLAGS"] = "--xla_gpu_deterministic_ops=true"
 
     if args.use_e3b:
         assert args.train_icm

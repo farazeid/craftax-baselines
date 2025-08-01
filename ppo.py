@@ -701,14 +701,23 @@ def run_ppo(config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--env_name", type=str, default="Craftax-Symbolic-v1")
+    parser.add_argument(
+        "--env_name",
+        type=str,
+        # default="Craftax-Symbolic-v1",
+        default="Craftax-Classic-Symbolic-v1",
+    )
     parser.add_argument(
         "--num_envs",
         type=int,
-        default=1024,
+        # default=1024,
+        default=512,
     )
     parser.add_argument(
-        "--total_timesteps", type=lambda x: int(float(x)), default=1e9
+        "--total_timesteps",
+        type=lambda x: int(float(x)),
+        # default=1e9,
+        default=1e6,
     )  # Allow scientific notation
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--num_steps", type=int, default=64)
@@ -726,17 +735,20 @@ if __name__ == "__main__":
     )
     parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--jit", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--seed", type=int)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--use_wandb", action=argparse.BooleanOptionalAction, default=True
     )
-    parser.add_argument("--save_policy", action="store_true")
+    parser.add_argument("--save_policy", action="store_true", default=True)
     parser.add_argument("--num_repeats", type=int, default=1)
     parser.add_argument("--layer_size", type=int, default=512)
     parser.add_argument("--wandb_project", type=str, default="PPO")
     parser.add_argument("--wandb_entity", type=str)
     parser.add_argument(
-        "--use_optimistic_resets", action=argparse.BooleanOptionalAction, default=True
+        "--use_optimistic_resets",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        # default=False,
     )
     parser.add_argument("--optimistic_reset_ratio", type=int, default=16)
 

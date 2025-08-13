@@ -660,6 +660,8 @@ def run_ppo(config):
             + "M"
             + "."
             + config["WANDB_PROJECT"]
+            + ("+ICM" if config["TRAIN_ICM"] and not config["USE_E3B"] else "")
+            + ("+E3B" if config["USE_E3B"] else ""),
         )
         mlflow.start_run()
         mlflow.log_params(config)

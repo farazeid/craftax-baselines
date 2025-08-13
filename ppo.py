@@ -1,36 +1,58 @@
+# uv run --python 3.9 --script
+# /// script
+# requires-python = ">=3.9"
+# dependencies = [
+# "jax[cuda12]",
+# "distrax",
+# "optax",
+# "flax",
+# "numpy",
+# "black",
+# "pre-commit",
+# "argparse",
+# "wandb",
+# "mlflow",
+# "orbax-checkpoint==0.5.0",
+# "pygame",
+# "gymnax",
+# "chex",
+# "matplotlib",
+# "imageio",
+# "craftax"
+# ]
+# ///
+
 import argparse
 import os
 import sys
 import time
+from typing import NamedTuple
 
 import jax
 import jax.numpy as jnp
+import mlflow
 import numpy as np
 import optax
-from craftax.craftax_env import make_craftax_env_from_name
-
 import wandb
-from typing import NamedTuple
-
+from craftax.craftax_env import make_craftax_env_from_name
 from flax.training import orbax_utils
 from flax.training.train_state import TrainState
-from orbax.checkpoint import (
-    PyTreeCheckpointer,
-    CheckpointManagerOptions,
-    CheckpointManager,
-)
-
 from logz.batch_logging import batch_log, create_log_dict
 from models.actor_critic import (
     ActorCritic,
     ActorCriticConv,
 )
 from models.icm import ICMEncoder, ICMForward, ICMInverse
+from orbax.checkpoint import (
+    CheckpointManager,
+    CheckpointManagerOptions,
+    PyTreeCheckpointer,
+)
 from wrappers import (
+    AutoResetEnvWrapper,
+    BatchEnvWrapper,
     LogWrapper,
     OptimisticResetVecEnvWrapper,
-    BatchEnvWrapper,
-    AutoResetEnvWrapper,
 )
 
 # Code adapted from the original implementation made by Chris Lu
@@ -404,9 +426,9 @@ def make_train(config):
                 ) = update_state
                 rng, _rng = jax.random.split(rng)
                 batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
-                assert (
-                    batch_size == config["NUM_STEPS"] * config["NUM_ENVS"]
-                ), "batch size must be equal to number of steps * number of envs"
+                assert batch_size == config["NUM_STEPS"] * config["NUM_ENVS"], (
+                    "batch size must be equal to number of steps * number of envs"
+                )
                 permutation = jax.random.permutation(_rng, batch_size)
                 batch = (traj_batch, advantages, targets)
                 batch = jax.tree.map(
@@ -540,9 +562,9 @@ def make_train(config):
                 (ex_state, traj_batch, rng) = update_state
                 rng, _rng = jax.random.split(rng)
                 batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
-                assert (
-                    batch_size == config["NUM_STEPS"] * config["NUM_ENVS"]
-                ), "batch size must be equal to number of steps * number of envs"
+                assert batch_size == config["NUM_STEPS"] * config["NUM_ENVS"], (
+                    "batch size must be equal to number of steps * number of envs"
+                )
                 permutation = jax.random.permutation(_rng, batch_size)
                 batch = jax.tree.map(
                     lambda x: x.reshape((batch_size,) + x.shape[2:]), traj_batch
@@ -622,15 +644,27 @@ def run_ppo(config):
     config = {k.upper(): v for k, v in config.__dict__.items()}
 
     if config["USE_WANDB"]:
-        wandb.init(
-            project=config["WANDB_PROJECT"],
-            entity=config["WANDB_ENTITY"],
-            config=config,
-            name=config["ENV_NAME"]
-            + "-"
+        # wandb.init(
+        #     project=config["WANDB_PROJECT"],
+        #     entity=config["WANDB_ENTITY"],
+        #     config=config,
+        #     name=config["ENV_NAME"]
+        #     + "-"
+        #     + str(int(config["TOTAL_TIMESTEPS"] // 1e6))
+        #     + "M",
+        # )
+        mlflow.set_experiment(
+            config["ENV_NAME"]
+            + "."
             + str(int(config["TOTAL_TIMESTEPS"] // 1e6))
-            + "M",
+            + "M"
+            + "."
+            + config["WANDB_PROJECT"]
+            + ("+ICM" if config["TRAIN_ICM"] and not config["USE_E3B"] else "")
+            + ("+E3B" if config["USE_E3B"] else ""),
         )
+        mlflow.start_run()
+        mlflow.log_params(config)
 
     rng = jax.random.PRNGKey(config["SEED"])
     rngs = jax.random.split(rng, config["NUM_REPEATS"])
@@ -651,30 +685,44 @@ def run_ppo(config):
             train_state = jax.tree.map(lambda x: x[0], train_states)
             orbax_checkpointer = PyTreeCheckpointer()
             options = CheckpointManagerOptions(max_to_keep=1, create=True)
-            path = os.path.join(wandb.run.dir, dir_name)
+            # path = os.path.join(wandb.run.dir, dir_name)
+            artifact_uri = mlflow.get_artifact_uri()
+            if artifact_uri.startswith("file://"):
+                artifact_uri = artifact_uri[len("file://") :]
+            path = os.path.join(artifact_uri, dir_name)
             checkpoint_manager = CheckpointManager(path, orbax_checkpointer, options)
             print(f"saved runner state to {path}")
             save_args = orbax_utils.save_args_from_target(train_state)
             checkpoint_manager.save(
-                config["TOTAL_TIMESTEPS"],
+                int(config["TOTAL_TIMESTEPS"]),
                 train_state,
                 save_kwargs={"save_args": save_args},
             )
 
         if config["SAVE_POLICY"]:
+            print("Saving policy...")
             _save_network(0, "policies")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--env_name", type=str, default="Craftax-Symbolic-v1")
+    parser.add_argument(
+        "--env_name",
+        type=str,
+        # default="Craftax-Symbolic-v1",
+        default="Craftax-Classic-Symbolic-v1",
+    )
     parser.add_argument(
         "--num_envs",
         type=int,
-        default=1024,
+        # default=1024,
+        default=512,
     )
     parser.add_argument(
-        "--total_timesteps", type=lambda x: int(float(x)), default=1e9
+        "--total_timesteps",
+        type=lambda x: int(float(x)),
+        # default=1e9,
+        default=1e6,
     )  # Allow scientific notation
     parser.add_argument("--lr", type=float, default=2e-4)
     parser.add_argument("--num_steps", type=int, default=64)
@@ -692,17 +740,20 @@ if __name__ == "__main__":
     )
     parser.add_argument("--debug", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--jit", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--seed", type=int)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--use_wandb", action=argparse.BooleanOptionalAction, default=True
     )
-    parser.add_argument("--save_policy", action="store_true")
+    parser.add_argument("--save_policy", action="store_true", default=True)
     parser.add_argument("--num_repeats", type=int, default=1)
     parser.add_argument("--layer_size", type=int, default=512)
-    parser.add_argument("--wandb_project", type=str)
+    parser.add_argument("--wandb_project", type=str, default="PPO")
     parser.add_argument("--wandb_entity", type=str)
     parser.add_argument(
-        "--use_optimistic_resets", action=argparse.BooleanOptionalAction, default=True
+        "--use_optimistic_resets",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        # default=False,
     )
     parser.add_argument("--optimistic_reset_ratio", type=int, default=16)
 
@@ -721,9 +772,17 @@ if __name__ == "__main__":
     parser.add_argument("--use_e3b", action="store_true")
     parser.add_argument("--e3b_lambda", type=float, default=0.1)
 
+    # Deterministic
+    parser.add_argument(
+        "--deterministic", action=argparse.BooleanOptionalAction, default=True
+    )
+
     args, rest_args = parser.parse_known_args(sys.argv[1:])
     if rest_args:
         raise ValueError(f"Unknown args {rest_args}")
+
+    if args.deterministic:
+        os.environ["XLA_FLAGS"] = "--xla_gpu_deterministic_ops=true"
 
     if args.use_e3b:
         assert args.train_icm

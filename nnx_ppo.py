@@ -23,6 +23,9 @@
 # ///
 
 
+# TODO: Dependencies, update jax>=0.7.1 flax>=0.11.1, rm distrax
+
+
 import argparse
 import os
 from pathlib import Path
@@ -36,7 +39,6 @@ import optax
 import yaml
 from craftax.craftax_env import make_craftax_env_from_name
 from flax import nnx
-from flax.training.train_state import TrainState
 
 from logz.batch_logging import batch_log, create_log_dict
 from wrappers import (
@@ -175,11 +177,11 @@ def make_run(config: dict[str, Any]) -> Callable:
     def run(rng: jax.random.PRNGKey):
         def batch_step(run_state, _):
             def step(run_state, _):
-                obs, train_state, env_state, batch_idx, key = run_state
+                obs, model, optim, env_state, batch_idx, key = run_state
 
                 key, action_key, step_key = jax.random.split(key, 3)
 
-                distribution, value = network.apply(train_state.params, obs)
+                distribution, value = model(obs)
                 action = distribution.sample(seed=action_key)
                 log_prob = distribution.log_prob(action)
 
@@ -204,7 +206,8 @@ def make_run(config: dict[str, Any]) -> Callable:
 
                 run_state = (
                     next_obs,
-                    train_state,
+                    model,
+                    optim,
                     env_state,
                     batch_idx,
                     key,
@@ -224,9 +227,9 @@ def make_run(config: dict[str, Any]) -> Callable:
                 return (value, transition.done, advantage), (advantage + value, advantage)
 
             def epoch_update(update_state, _):
-                def minibatch_update(train_state, minibatch):
-                    def loss_fn(params, transition, advantages, returns):
-                        distribution, new_value = network.apply(params, transition.obs)
+                def minibatch_update(model_optim, minibatch):
+                    def loss_fn(model, transition, advantages, returns):
+                        distribution, new_value = model(transition.obs)
                         new_log_prob = distribution.log_prob(transition.action)
                         entropy = distribution.entropy()
 
@@ -257,16 +260,15 @@ def make_run(config: dict[str, Any]) -> Callable:
                         loss = policy_loss + value_loss * vf_coef - entropy_loss * ent_coef
                         return loss, (policy_loss, value_loss, entropy_loss)
 
+                    model, optim = model_optim
                     batch, advantages, returns = minibatch
 
-                    loss, grads = jax.value_and_grad(loss_fn, has_aux=True)(
-                        train_state.params, batch, advantages, returns
-                    )
-                    train_state = train_state.apply_gradients(grads=grads)
+                    loss, grads = nnx.value_and_grad(loss_fn, has_aux=True)(model, batch, advantages, returns)
+                    optim.update(grads)
 
-                    return train_state, loss
+                    return model_optim, loss
 
-                train_state, batch, advantages, returns, key = update_state
+                model, optim, batch, advantages, returns, key = update_state
 
                 key, permutation_key = jax.random.split(key, 2)
 
@@ -285,32 +287,31 @@ def make_run(config: dict[str, Any]) -> Callable:
                     shuffled_joint,
                 )
 
-                train_state, losses = jax.lax.scan(
+                _, losses = nnx.scan(
                     minibatch_update,
-                    train_state,
-                    minibatches,
-                )
+                    length=n_minibatches,
+                )((model, optim), minibatches)
 
-                update_state = (train_state, batch, advantages, returns, key)
+                update_state = (model, optim, batch, advantages, returns, key)
                 return update_state, losses
 
-            run_state, batch = jax.lax.scan(
+            run_state, batch = nnx.scan(
                 step,
-                run_state,
                 length=n_batch_steps,
-            )
-            obs, train_state, env_state, batch_idx, batch_key = run_state
+            )(run_state, None)
+            obs, model, optim, env_state, batch_idx, batch_key = run_state
 
-            _, (returns, advantages) = jax.lax.scan(
+            _, (returns, advantages) = nnx.scan(
                 rollout_step,
+                reverse=True,
+                unroll=16,
+            )(
                 (
                     next_value := batch.value[-1],  # bootstrap the last value
                     next_done := batch.done[-1],  # bootstrap the last done
                     prev_advantage := jnp.zeros_like(batch.value[-1]),
                 ),
                 batch,
-                reverse=True,
-                unroll=16,  # ! idk what it do rn
             )
 
             advantages = jnp.where(
@@ -320,19 +321,19 @@ def make_run(config: dict[str, Any]) -> Callable:
             )
 
             update_state = (
-                train_state,
+                model,
+                optim,
                 batch,
                 advantages,
                 returns,
                 batch_key,
             )
-            update_state, losses = jax.lax.scan(
+            update_state, losses = nnx.scan(
                 epoch_update,
-                update_state,
                 length=n_epochs,
-            )
+            )(update_state, None)
 
-            train_state, _, _, _, _ = update_state
+            model, optim, _, _, _, _ = update_state
 
             # start: logging
 
@@ -361,28 +362,25 @@ def make_run(config: dict[str, Any]) -> Callable:
 
             run_state = (
                 obs,
-                train_state,
+                model,
+                optim,
                 env_state,
                 batch_idx + 1,
                 batch_key,
             )
             return run_state, log_info
 
-        key, network_key, env_key, batch_key = jax.random.split(rng, 4)
+        key, model_key, env_key, batch_key = jax.random.split(rng, 4)
 
-        network_key = nnx.Rngs(0)
         if "Symbolic" in config["env"]["id"]:
-            network = ActorCritic(
+            model = ActorCritic(
                 din=env.observation_space(env_params).shape[0],
                 layer_width=config["agent"]["layer_size"],
                 dout=env.action_space(env_params).n,
-                rngs=network_key,
+                rngs=nnx.Rngs(model_key),
             )
         else:
             raise NotImplementedError("NNX ActorCriticConv not implemented.")
-
-        dummy_obs = jnp.zeros((1, *env.observation_space(env_params).shape))
-        network_params = network.init(network_key, dummy_obs)
 
         tx = optax.chain(
             optax.clip_by_global_norm(config["training"]["max_grad_norm"]),
@@ -392,26 +390,22 @@ def make_run(config: dict[str, Any]) -> Callable:
             ),
         )
 
-        train_state = TrainState.create(
-            apply_fn=network.apply,
-            params=network_params,
-            tx=tx,
-        )
+        optim = nnx.Optimizer(model, tx)
 
         obs, env_state = env.reset(env_key, env_params)
 
         run_state = (
             obs,
-            train_state,
+            model,
+            optim,
             env_state,
             batch_idx := 0,
             batch_key,
         )
-        run_state, log_info = jax.lax.scan(
+        run_state, log_info = nnx.scan(
             batch_step,
-            run_state,
             length=n_batches,
-        )
+        )(run_state, None)
 
         return run_state, log_info
 
@@ -475,7 +469,7 @@ if __name__ == "__main__":
     runs_keys = jax.random.split(key, config["n_runs"])
 
     run = make_run(config)
-    run = jax.jit(run)
-    run = jax.vmap(run)
+    run = nnx.jit(run)
+    run = nnx.vmap(run)
 
     run_state, log_info = run(runs_keys)

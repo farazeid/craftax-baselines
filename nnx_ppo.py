@@ -28,25 +28,117 @@ import os
 from pathlib import Path
 from typing import Any, Callable, NamedTuple
 
+import distrax
 import jax
 import jax.numpy as jnp
 import mlflow
 import optax
 import yaml
 from craftax.craftax_env import make_craftax_env_from_name
+from flax import nnx
 from flax.training.train_state import TrainState
 
 from logz.batch_logging import batch_log, create_log_dict
-from models.actor_critic import (
-    ActorCritic,
-    ActorCriticConv,
-)
 from wrappers import (
     AutoResetEnvWrapper,
     BatchEnvWrapper,
     LogWrapper,
     OptimisticResetVecEnvWrapper,
 )
+
+
+class ActorCritic(nnx.Module):
+    def __init__(
+        self,
+        din: int,
+        layer_width: int,
+        dout: int,
+        rngs: nnx.Rngs,
+        activation: str = "tanh",
+    ):
+        self.activation = activation
+        self.linear1 = nnx.Linear(
+            din,
+            layer_width,
+            kernel_init=nnx.initializers.orthogonal(jnp.sqrt(2)),
+            bias_init=nnx.initializers.constant(0.0),
+            rngs=rngs,
+        )
+        self.linear2 = nnx.Linear(
+            layer_width,
+            layer_width,
+            kernel_init=nnx.initializers.orthogonal(jnp.sqrt(2)),
+            bias_init=nnx.initializers.constant(0.0),
+            rngs=rngs,
+        )
+        self.linear3 = nnx.Linear(
+            layer_width,
+            layer_width,
+            kernel_init=nnx.initializers.orthogonal(jnp.sqrt(2)),
+            bias_init=nnx.initializers.constant(0.0),
+            rngs=rngs,
+        )
+        self.linear4 = nnx.Linear(
+            layer_width,
+            dout,
+            kernel_init=nnx.initializers.orthogonal(0.01),
+            bias_init=nnx.initializers.constant(0.0),
+            rngs=rngs,
+        )
+
+        self.linear1_critic = nnx.Linear(
+            din,
+            layer_width,
+            kernel_init=nnx.initializers.orthogonal(jnp.sqrt(2)),
+            bias_init=nnx.initializers.constant(0.0),
+            rngs=rngs,
+        )
+        self.linear2_critic = nnx.Linear(
+            layer_width,
+            layer_width,
+            kernel_init=nnx.initializers.orthogonal(jnp.sqrt(2)),
+            bias_init=nnx.initializers.constant(0.0),
+            rngs=rngs,
+        )
+        self.linear3_critic = nnx.Linear(
+            layer_width,
+            layer_width,
+            kernel_init=nnx.initializers.orthogonal(jnp.sqrt(2)),
+            bias_init=nnx.initializers.constant(0.0),
+            rngs=rngs,
+        )
+        self.linear4_critic = nnx.Linear(
+            layer_width,
+            1,
+            kernel_init=nnx.initializers.orthogonal(1.0),
+            bias_init=nnx.initializers.constant(0.0),
+            rngs=rngs,
+        )
+
+    def __call__(self, x):
+        if self.activation == "relu":
+            activation = nnx.relu
+        else:
+            activation = nnx.tanh
+
+        actor_mean = self.linear1(x)
+        actor_mean = activation(actor_mean)
+        actor_mean = self.linear2(actor_mean)
+        actor_mean = activation(actor_mean)
+        actor_mean = self.linear3(actor_mean)
+        actor_mean = activation(actor_mean)
+        actor_mean = self.linear4(actor_mean)
+        pi = distrax.Categorical(logits=actor_mean)
+
+        critic = self.linear1_critic(x)
+        critic = activation(critic)
+        critic = self.linear2_critic(critic)
+        critic = activation(critic)
+        critic = self.linear3_critic(critic)
+        critic = activation(critic)
+        critic = self.linear4_critic(critic)
+
+        return pi, jnp.squeeze(critic, axis=-1)
 
 
 class Transition(NamedTuple):
@@ -278,16 +370,17 @@ def make_run(config: dict[str, Any]) -> Callable:
 
         key, network_key, env_key, batch_key = jax.random.split(rng, 4)
 
+        network_key = nnx.Rngs(0)
         if "Symbolic" in config["env"]["id"]:
             network = ActorCritic(
-                env.action_space(env_params).n,
-                config["agent"]["layer_size"],
+                din=env.observation_space(env_params).shape[0],
+                layer_width=config["agent"]["layer_size"],
+                dout=env.action_space(env_params).n,
+                rngs=network_key,
             )
         else:
-            network = ActorCriticConv(
-                env.action_space(env_params).n,
-                config["agent"]["layer_size"],
-            )
+            raise NotImplementedError("NNX ActorCriticConv not implemented.")
+
         dummy_obs = jnp.zeros((1, *env.observation_space(env_params).shape))
         network_params = network.init(network_key, dummy_obs)
 

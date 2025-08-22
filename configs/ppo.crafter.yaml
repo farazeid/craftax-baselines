@@ -1,0 +1,43 @@
+# PPO Configuration for Craftax Environment
+
+# Experiment settings
+# experiment_name: "Crafter PPO"
+seed: 42
+n_runs: 1
+n_envs: 512
+deterministic: true
+
+# Environment settings
+env:
+  id: "Craftax-Classic-Symbolic-v1" # or "Craftax-Classic-Pixels-v1"
+  optimistic_resets:
+    reset_ratio: 16
+
+agent:
+  layer_size: 512 # Hidden layer size for symbolic observations
+
+# Training hyperparameters
+training:
+  # Core PPO parameters
+  gamma: 0.99 # Discount factor
+  gae_lambda: 0.8 # GAE lambda for advantage estimation
+  clip_coef: 0.2 # PPO clipping coefficient
+  vf_coef: 0.5 # Value function loss coefficient
+  ent_coef: 0.01 # Entropy loss coefficient
+
+  # Optimizer settings
+  max_grad_norm: 1.0 # Maximum gradient norm for clipping
+
+  # Training schedule
+  n_steps: 1e6 # Total training steps (10M)
+  n_batch_steps: 64
+  n_epochs: 4 # Number of PPO epochs per batch
+  n_minibatches: 8 # Number of minibatches per epoch
+
+  # Learning rate
+  lr: 2e-4 # Learning rate
+  anneal_lr: true # Whether to anneal learning rate
+
+  # Optional parameters (with defaults)
+  norm_advantage: true # Whether to normalize advantages
+  clip_vloss: false # Whether to clip value loss

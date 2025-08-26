@@ -410,8 +410,8 @@ def make_run(config: dict[str, Any]) -> Callable:
 
             jax.lax.cond(
                 jnp.logical_or(
-                    jnp.equal(jnp.remainder(batch_idx, config.get("metrics_every", 1)), 0),
-                    jnp.equal(batch_idx, n_batches - 1),
+                    batch_idx % config.get("metrics_every", 1) == 0,
+                    batch_idx == n_batches - 1,
                 ),
                 do_metrics,
                 do_nothing,
@@ -419,8 +419,8 @@ def make_run(config: dict[str, Any]) -> Callable:
 
             jax.lax.cond(
                 jnp.logical_or(
-                    jnp.equal(jnp.remainder(batch_idx, config.get("checkpoint_every", 10)), 0),
-                    jnp.equal(batch_idx, n_batches - 1),
+                    batch_idx % config.get("checkpoint_every", 10) == 0,
+                    batch_idx == n_batches - 1,
                 ),
                 do_checkpoint,
                 do_nothing,
@@ -428,8 +428,8 @@ def make_run(config: dict[str, Any]) -> Callable:
 
             jax.lax.cond(
                 jnp.logical_or(
-                    jnp.equal(jnp.remainder(batch_idx, config.get("snapshot_every", jnp.inf)), 0),
-                    jnp.equal(batch_idx, n_batches - 1),
+                    batch_idx % config.get("snapshot_every", jnp.inf) == 0,
+                    batch_idx == n_batches - 1,
                 ),
                 do_snapshot,
                 do_nothing,
